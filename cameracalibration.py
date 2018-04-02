@@ -19,6 +19,7 @@ class CalibratedCamera(object):
         """
         self.calibrated = False
         self.input_calibration_folder = input_calibration_folder
+        self.M_warp, self.M_unwarp = self._get_warp_matrix()
 
     def isCalibrated(self):
         return self.calibrated
@@ -99,3 +100,34 @@ class CalibratedCamera(object):
         else:
             logging.error("Camera is not calibrated, calibrate the camera before using undistort")
             return None
+
+    def _get_warp_matrix(self):
+        w, h = 1280, 720
+        x, y = 0.5*w, 0.8*h
+
+        src = np.float32([
+                [200./1280*w, 720./720*h],
+                [453./1280*w,547./720*h],
+                [835./1280*w,547./720*h],
+                [1100./1280*w,720./720*h]
+            ])
+
+        dst = np.float32([
+            [(w-x)/2.,h],
+            [(w-x)/2.,0.82*h],
+            [(w+x)/2.0,0.82*h],
+            [(w+x)/2.,h]
+        ])
+        M_warp = cv2.getPerspectiveTransform(src, dst)
+        M_unwarp = cv2.getPerspectiveTransform(dst, src)
+        return M_warp, M_unwarp
+
+    def warp(self, img):
+        img_size = (img.shape[1], img.shape[0])
+        warped = cv2.warpPerspective(img, self.M_warp, img_size, flags=cv2.INTER_LINEAR)
+        return warped
+
+    def unwarp(self, img):
+        img_size = (img.shape[1], img.shape[0])
+        unwarped = cv2.warpPerspective(img, self.M_unwarp, img_size, flags=cv2.INTER_LINEAR)
+        return unwarped
