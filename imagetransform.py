@@ -2,6 +2,8 @@ import cv2
 import numpy as np
 import matplotlib.pyplot as plt
 import logging
+import glob
+import os
 
 # Define a function that applies Sobel x or y,
 # then takes an absolute value and applies a threshold.
@@ -53,7 +55,7 @@ def mag_thresh(img, sobel_kernel=3, mag_thresh=(0, 255)):
 # and applies a threshold.
 def dir_threshold(img, sobel_kernel=3, thresh=(0, np.pi/2)):
     # Grayscale
-    gray = cv2.cvtColor(img, cv2.COLOR_RGB2GRAY)
+    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
     # Calculate the x and y gradients
     sobelx = cv2.Sobel(gray, cv2.CV_64F, 1, 0, ksize=sobel_kernel)
     sobely = cv2.Sobel(gray, cv2.CV_64F, 0, 1, ksize=sobel_kernel)
@@ -82,12 +84,32 @@ def image2binary(img, thr=0):
     binary_image[(img > thr)] = 1
     return binary_image
 
+def hls_select(img, thresh=(0, 255)):
+    # 1) Convert to HLS color space
+    new_img = cv2.cvtColor(img, cv2.COLOR_BGR2HLS)
+    # 2) Apply a threshold to the S channel
+    s_channel = new_img[:,:,2]
+    binary_output = np.zeros_like(s_channel)
+    binary_output[(s_channel>thresh[0]) & (s_channel<=thresh[1])] = 1
+    # 3) Return a binary image of threshold result
+    return binary_output
+
 def binary_and(binary_img_1, binary_img_2):
     """
     Return intersection of two binary images
     """
     if binary_img_1.shape == binary_img_2.shape:
         output = np.where(np.logical_and(binary_img_1,binary_img_2)==True, 1., 0.)
+        return output
+    else:
+        return None
+
+def binary_or(binary_img_1, binary_img_2):
+    """
+    Return intersection of two binary images
+    """
+    if binary_img_1.shape == binary_img_2.shape:
+        output = np.where(np.logical_or(binary_img_1,binary_img_2)==True, 1., 0.)
         return output
     else:
         return None
@@ -130,34 +152,24 @@ def split_image(image):
     imleft = image2binary(region_of_interest(image, vertices_left))
     imright = image2binary(region_of_interest(image, vertices_right))
 
-    plt.figure(1)
-    plt.subplot(211)
-    plt.imshow(imleft)
-
-    plt.subplot(212)
-    plt.imshow(imright)
-    plt.show()
-
     return imleft, imright
 
 def get_polyfitline(binary_image):
     coordinates = np.where(binary_image == 1)
     y_range = coordinates[0]
     x_range = coordinates[1]
-    print(y_range)
-    print(x_range)
     fit_line = np.polyfit(y_range, x_range, 2)
-    return fit_line
+    return fit_line, curvature(x_range, y_range)
 
 def get_polyfitlines(binary_image):
     imleft, imright = split_image(binary_image)
-    left_line = get_polyfitline(imleft)
-    right_line = get_polyfitline(imright)
-    return left_line, right_line
+    left_line, left_curvature = get_polyfitline(imleft)
+    right_line, right_curvature = get_polyfitline(imright)
+    return left_line, right_line, np.mean((left_curvature, right_curvature))
 
 def get_polyfill_image(binary_image):
     logging.debug("Getting polyfit lines for left and right images.")
-    left_line, right_line = get_polyfitlines(binary_image)
+    left_line, right_line, curv = get_polyfitlines(binary_image)
 
     binary_l = np.zeros_like(binary_image, dtype=np.uint8)
 
@@ -173,8 +185,45 @@ def get_polyfill_image(binary_image):
 
     polygon = np.dstack((np.zeros(binary_image.shape), binary_l, np.zeros(binary_image.shape))).astype('uint8')
 
+    print("Curvature: {0}".format(curv))
+
     return polygon
+
+def curvature(x, y):
+    # Define conversions in x and y from pixels space to meters
+    ym_per_pix = 50 / 720  # meters per pixel in y dimension
+    xm_per_pix = 7.4 / 1280  # meters per pixel in x dimension
+
+    y_eval = np.max(y)
+
+    # Fit new polynomials to x,y in world space
+    fit_cr = np.polyfit(y * ym_per_pix, x * xm_per_pix, 2)
+
+    # Radio of the curvature
+    curve_radio = ((1 + (2 * fit_cr[0] * y_eval * ym_per_pix + fit_cr[1]) ** 2) ** 1.5) / np.absolute(2 * fit_cr[0])
+    return curve_radio
 
 def pipeline(img):
     logging.debug("Applying pipeline to get binary image...")
-    return abs_sobel_thresh(img,'x',30,60)
+    sobel = abs_sobel_thresh(img,'x',30,60)
+    hls = image2binary(hls_select(img, (160, 255)))
+
+    output = binary_or(hls, sobel)
+    return image2binary(output)
+
+def test_pipeline(folder="test_images"):
+    images_files = glob.glob(os.path.join(folder, "test*.jpg"))[2:]
+    images = [cv2.imread(x) for x in images_files]
+    #images_undistorted = [cal_cam.undistort(x) for x in images_files]
+    fig = plt.figure(figsize=(8, 8))
+    columns = 2
+    rows = 4
+    for i in range(1, columns * rows + 1, 2):
+        fig.add_subplot(rows, columns, i)
+        img = images.pop()
+        plt.imshow(img)
+        fig.add_subplot(rows, columns, i+1)
+        img = pipeline(img)
+        plt.imshow(img)
+    plt.show()
+

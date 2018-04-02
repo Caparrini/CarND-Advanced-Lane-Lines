@@ -239,26 +239,13 @@ def slide_window_search(warped):
         # Draw the results
         gray_template = np.array(r_points + l_points, np.uint8)  # add both left and right window pixels together
         zero_channel = np.zeros_like(gray_template)  # create a zero color channel
-        template = np.array(cv2.merge((zero_channel, gray_template, zero_channel)), np.uint8)  # make window pixels green
-        warpage = np.dstack((warped, warped, warped)) * 255  # making the original road pixels 3 color channels
-        output = cv2.addWeighted(warpage, 1, template, 0.5, 0.0)  # overlay the orignal road image with window results
 
         gray_template = imagetransform.image2binary(gray_template)
         output_pixels = imagetransform.binary_and(gray_template, warped)
 
     # If no window centers found, just display orginal road image
     else:
-        output = np.array(cv2.merge((warped, warped, warped)), np.uint8)
         output_pixels = np.array(cv2.merge((warped, warped, warped)), np.uint8)
-
-    # Display the final results
-    plt.imshow(output)
-    plt.title('window fitting results')
-    plt.show()
-    # Display the final results
-    plt.imshow(output_pixels, cmap='gray')
-    plt.title('window fitting pixels')
-    plt.show()
 
     return output_pixels
 
