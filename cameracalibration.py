@@ -4,6 +4,7 @@ import cv2
 import glob
 import logging
 import matplotlib.pyplot as plt
+import imagetransform
 
 logging.basicConfig(level=logging.DEBUG)
 
@@ -87,14 +88,13 @@ class CalibratedCamera(object):
         self.calibrated = True
         logging.info("Calibration done!")
 
-    def undistort(self, image_file):
+    def undistort(self, img):
         """
 
         :param image_file: image to undistort
         :return: undistorted image if calibrated
         """
         if (self.calibrated):
-            img = cv2.imread(image_file)
             dst = cv2.undistort(img, self.mtx, self.dist, None, self.mtx)
             return dst
         else:
@@ -105,21 +105,21 @@ class CalibratedCamera(object):
         w, h = 1280, 720
         x, y = 0.5*w, 0.8*h
 
-        src = np.float32([
+        self.src = np.float32([
                 [200./1280*w, 720./720*h],
                 [453./1280*w,547./720*h],
                 [835./1280*w,547./720*h],
                 [1100./1280*w,720./720*h]
             ])
 
-        dst = np.float32([
+        self.dst = np.float32([
             [(w-x)/2.,h],
             [(w-x)/2.,0.82*h],
             [(w+x)/2.0,0.82*h],
             [(w+x)/2.,h]
         ])
-        M_warp = cv2.getPerspectiveTransform(src, dst)
-        M_unwarp = cv2.getPerspectiveTransform(dst, src)
+        M_warp = cv2.getPerspectiveTransform(self.src, self.dst)
+        M_unwarp = cv2.getPerspectiveTransform(self.dst, self.src)
         return M_warp, M_unwarp
 
     def warp(self, img):
@@ -131,3 +131,12 @@ class CalibratedCamera(object):
         img_size = (img.shape[1], img.shape[0])
         unwarped = cv2.warpPerspective(img, self.M_unwarp, img_size, flags=cv2.INTER_LINEAR)
         return unwarped
+
+    def verify_perspective_transform(self, img):
+        polylined = img.copy()
+        warped = self.warp(img)
+        polylined = cv2.polylines(polylined, np.int32([self.src]), 1, (255,0,0))
+        warped = cv2.polylines(warped, np.int32([self.dst]), 1, (255,0,0))
+        imagetransform.show_image_pair(polylined, warped, "Original", "Warped")
+
+
