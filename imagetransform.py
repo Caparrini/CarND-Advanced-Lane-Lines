@@ -34,7 +34,7 @@ def abs_sobel_thresh(img, orient='x', thresh_min=0, thresh_max=255):
 # and applies a threshold
 def mag_thresh(img, sobel_kernel=3, mag_thresh=(0, 255)):
     # Convert to grayscale
-    gray = cv2.cvtColor(img, cv2.COLOR_RGB2GRAY)
+    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
     # Take both Sobel x and y gradients
     sobelx = cv2.Sobel(gray, cv2.CV_64F, 1, 0, ksize=sobel_kernel)
     sobely = cv2.Sobel(gray, cv2.CV_64F, 0, 1, ksize=sobel_kernel)
@@ -84,15 +84,27 @@ def image2binary(img, thr=0):
     binary_image[(img > thr)] = 1
     return binary_image
 
-def hls_select(img, thresh=(0, 255)):
+def hls_select(img, thresh=(0, 255), channel=2):
     # 1) Convert to HLS color space
     new_img = cv2.cvtColor(img, cv2.COLOR_BGR2HLS)
     # 2) Apply a threshold to the S channel
-    s_channel = new_img[:,:,2]
-    binary_output = np.zeros_like(s_channel)
-    binary_output[(s_channel>thresh[0]) & (s_channel<=thresh[1])] = 1
+    hls_channel = new_img[:,:,channel]
+    binary_output = np.zeros_like(hls_channel)
+    binary_output[(hls_channel>thresh[0]) & (hls_channel<=thresh[1])] = 1
     # 3) Return a binary image of threshold result
     return binary_output
+
+def hsv_select(img, lower_color=np.array([10,0,100], dtype=np.uint8),
+               upper_color=np.array([40,255,255], dtype=np.uint8)):
+    hsv_img = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
+    mask = cv2.inRange(hsv_img, lower_color, upper_color)
+    res_img = cv2.bitwise_and(img, img, mask=mask)
+    return res_img
+
+def yellow_select(img):
+    yellow_hsv = hsv_select(img, np.array([20, 0, 100], dtype=np.uint8), np.array([40, 255, 255], dtype=np.uint8))
+    yellow = image2binary(yellow_hsv[:,:,2])
+    return yellow
 
 def binary_and(binary_img_1, binary_img_2):
     """
@@ -187,7 +199,7 @@ def get_polyfill_image(binary_image):
 
     print("Curvature: {0}".format(curv))
 
-    return polygon
+    return polygon, curv
 
 def curvature(x, y):
     # Define conversions in x and y from pixels space to meters
@@ -206,10 +218,60 @@ def curvature(x, y):
 def pipeline(img):
     logging.debug("Applying pipeline to get binary image...")
     sobel = abs_sobel_thresh(img,'x',30,60)
-    hls = image2binary(hls_select(img, (160, 255)))
+    hls = image2binary(hls_select(img, (180, 255)))
+    white = image2binary(hls_select(img,(220,255),1))
+    yellow = yellow_select(img)
 
     output = binary_or(hls, sobel)
+    output = binary_or(output, white)
+    output = binary_or(output, yellow)
     return image2binary(output)
+
+def new_pipeline(img):
+    gradx = abs_sobel_thresh(img, 'x', 18, 255)
+    grady = abs_sobel_thresh(img, 'y', 26, 255)
+
+    mag_th = mag_thresh(img, sobel_kernel=9, mag_thresh=(50, 250))
+    dir_th = dir_threshold(img, sobel_kernel=15, thresh=(0.7, 1.3))
+
+    #white = image2binary(hls_select(img,(220,255),1))
+    white = color_threshold(img, hls_sthresh=(88, 255), hsv_sthresh=(0, 70), hsv_vthresh=(160, 255))
+    #yellow = yellow_select(img)
+    yellow = color_threshold(img, hls_sthresh=(88, 190), hsv_vthresh=(100, 255))
+
+    output = np.zeros_like(img[:,:,1])
+
+    output[((gradx == 1) & (grady == 1)) | (
+    (yellow == 1) | ((white == 1) & ((mag_th == 1) & (dir_th == 1))))] = 1
+    return output
+
+def color_threshold(image, hls_sthresh=(0, 255), hsv_sthresh=(0, 255), hsv_vthresh=(0, 255)):
+    hsv = cv2.cvtColor(image, cv2.COLOR_RGB2HSV)
+    v_channel = hsv[:, :, 2]
+    v_binary = np.zeros_like(v_channel)
+    v_binary[(v_channel >= hsv_vthresh[0]) & (v_channel <= hsv_vthresh[1])] = 1
+
+    # hls = cv2.cvtColor(image, cv2.COLOR_RGB2HLS)
+    s_channel = hsv[:, :, 1]
+    s_binary = np.zeros_like(s_channel)
+    s_binary[(s_channel > hsv_sthresh[0]) & (s_channel <= hsv_sthresh[1])] = 1
+
+    hls = cv2.cvtColor(image, cv2.COLOR_RGB2HLS)
+    s2_channel = hls[:, :, 2]
+    s2_binary = np.zeros_like(s2_channel)
+    s2_binary[(s2_channel > hls_sthresh[0]) & (s2_channel <= hls_sthresh[1])] = 1
+
+    output = np.zeros_like(s_channel)
+    output[(s_binary == 1) & (v_binary == 1) & (s2_binary == 1)] = 1
+
+    return output
+
+
+def window_mask(width, height, img_ref, center, level):
+    output = np.zeros_like(img_ref)
+    output[int(img_ref.shape[0] - (level + 1) * height):int(img_ref.shape[0] - level * height),
+    max(0, int(center - width)):min(int(center + width), img_ref.shape[1])] = 1
+    return output
 
 def test_pipeline(folder="test_images"):
     images_files = glob.glob(os.path.join(folder, "test*.jpg"))[2:]
@@ -226,4 +288,28 @@ def test_pipeline(folder="test_images"):
         img = pipeline(img)
         plt.imshow(img)
     plt.show()
+
+def draw_road_lanes(image, left_lane, inner_lane, right_lane, cal_cam):
+    road = np.zeros_like(image)
+
+    cv2.fillPoly(road, [left_lane], color=[255, 255, 255])
+    cv2.fillPoly(road, [right_lane], color=[255, 255, 255])
+    cv2.fillPoly(road, [inner_lane], color=[0, 255, 0])
+
+    road_warped = cal_cam.unwarp(road)
+
+    result = cv2.addWeighted(image, 1.0, road_warped, 1.0, 0.0)
+
+    return result
+
+def show_image_pair(img1,img2,title1='',title2=''):
+	"""
+	Function takes 2 images and plot them next to each other.
+	"""
+	f, (ax1,ax2) = plt.subplots(1,2,figsize=(20,10))
+	ax1.imshow(img1)
+	ax1.set_title(title1)
+	ax2.imshow(img2)
+	ax2.set_title(title2)
+	plt.show()
 
